@@ -1,22 +1,17 @@
 """
 app.py
-TAHAP 4 (REVISI) -- Dashboard dengan tema custom, alur step-by-step,
-input nama pengguna, panduan foto benar/salah, dan grafik confidence
-interaktif (Plotly).
+TAHAP 4 (REVISI 2) -- Ganti tool crop dari canvas freeform (bermasalah
+di Streamlit Cloud: background image tidak muncul) ke streamlit-cropper
+(rectangle, stabil di cloud manapun).
 
 Perubahan dibanding revisi sebelumnya:
-1. Header & tema dipercantik (CSS custom, warna konsisten).
-2. Alur dipecah jadi langkah bernomor (1. Identitas -> 2. Panduan foto
-   -> 3. Upload & crop -> 4. Hasil) supaya lebih jelas urutannya.
-3. Input Nama ditambahkan di awal (dipakai untuk personalisasi &
-   laporan unduhan).
-4. Panduan foto benar vs salah ditampilkan sebelum upload, memakai
-   2 gambar contoh (Contoh_Foto_Benar.jpeg, Contoh_Foto_Salah.jpeg).
-5. Confidence score ditampilkan sebagai gauge chart interaktif
-   (Plotly) -- bukan cuma teks/metric.
-
-Logika inti (flash-removal, ekstraksi fitur, prediksi, brush masking,
-validasi, bounding box) TIDAK diubah dari Tahap 4 sebelumnya.
+- Canvas brush freeform (streamlit_drawable_canvas) DIHAPUS.
+- Diganti st_cropper (streamlit_cropper) -- user drag kotak crop di atas
+  foto, lalu kotak itu yang dipakai sebagai area analisis (bukan brush).
+- Semua piksel di dalam kotak crop akan diproses (flash-removal tetap
+  berjalan sama seperti sebelumnya).
+- Bagian lain (header, tema, input nama, panduan foto, gauge chart,
+  history, download laporan) TIDAK diubah.
 """
 
 import streamlit as st
@@ -25,13 +20,12 @@ from PIL import Image
 from datetime import datetime
 import plotly.graph_objects as go
 
-from streamlit_drawable_canvas import st_canvas
+from streamlit_cropper import st_cropper
 
 from anemia_core import (
     load_artifacts,
     predict_anemia_from_pixels,
     validate_selection,
-    get_selection_bbox,
 )
 
 # ----------------------------------------------------------------------
@@ -163,7 +157,7 @@ def build_report_text(entry: dict) -> str:
         f"%Green         : {entry['pct_green']:.2f}%",
         f"%Blue          : {entry['pct_blue']:.2f}%",
         "-" * 50,
-        f"Piksel dipilih (brush) : {entry['n_pixels_total']}",
+        f"Piksel dipilih (crop)  : {entry['n_pixels_total']}",
         f"Piksel dibuang (flash) : {entry['n_pixels_flash']}",
         f"Piksel valid dipakai   : {entry['n_pixels_total'] - entry['n_pixels_flash']}",
         "-" * 50,
@@ -241,18 +235,18 @@ def make_rgb_bar(pct_red: float, pct_green: float, pct_blue: float) -> go.Figure
 
 
 # ----------------------------------------------------------------------
-# LANGKAH 1 -- IDENTITAS PENGGUNA
+# LANGKAH 1 -- IDENTITAS
 # ----------------------------------------------------------------------
-step_header(1, "Masukkan Data Diri")
+step_header(1, "Identitas")
 
-col1, col2 = st.columns(2)
-with col1:
-    user_name = st.text_input("Nama", placeholder="Masukkan nama kamu")
-with col2:
+col_name, col_sex = st.columns(2)
+with col_name:
+    user_name = st.text_input("Nama", placeholder="Masukkan nama Anda")
+with col_sex:
     sex = st.radio("Jenis kelamin", options=["M", "F"], horizontal=True)
 
-if not user_name.strip():
-    st.info("⬆️ Masukkan nama terlebih dahulu untuk melanjutkan.")
+if not user_name:
+    st.info("Masukkan nama terlebih dahulu untuk melanjutkan.")
     st.stop()
 
 st.divider()
@@ -260,24 +254,26 @@ st.divider()
 # ----------------------------------------------------------------------
 # LANGKAH 2 -- PANDUAN FOTO
 # ----------------------------------------------------------------------
-step_header(2, "Panduan Mengambil Foto")
-st.write(
-    "Tarik kelopak mata bagian bawah dengan jari agar konjungtiva (jaringan "
-    "merah muda di bagian dalam kelopak) terlihat jelas, lalu foto **dengan "
-    "zoom dekat** seperti contoh berikut:"
-)
+step_header(2, "Panduan Foto")
 
 gcol1, gcol2 = st.columns(2)
 with gcol1:
-    st.image("Contoh_Foto_Benar.jpeg", use_container_width=True)
-    st.markdown('<div class="guide-card guide-good">✅ Contoh Benar — konjungtiva terlihat jelas &amp; close-up</div>', unsafe_allow_html=True)
+    try:
+        st.image("Contoh_Foto_Benar.jpeg", use_container_width=True)
+    except Exception:
+        st.warning("Gambar 'Contoh_Foto_Benar.jpeg' tidak ditemukan di folder.")
+    st.markdown('<div class="guide-card guide-good">✅ Contoh foto BENAR</div>', unsafe_allow_html=True)
+
 with gcol2:
-    st.image("Contoh_Foto_Salah.jpeg", use_container_width=True)
-    st.markdown('<div class="guide-card guide-bad">❌ Contoh Salah — foto wajah penuh, konjungtiva tidak terlihat</div>', unsafe_allow_html=True)
+    try:
+        st.image("Contoh_Foto_Salah.jpeg", use_container_width=True)
+    except Exception:
+        st.warning("Gambar 'Contoh_Foto_Salah.jpeg' tidak ditemukan di folder.")
+    st.markdown('<div class="guide-card guide-bad">❌ Contoh foto SALAH</div>', unsafe_allow_html=True)
 
 st.caption(
-    "💡 Pastikan cahaya cukup terang (tapi tanpa flash langsung ke mata), "
-    "dan tidak buram/blur."
+    "Ambil foto close-up (zoom) ke bagian konjungtiva (kelopak mata bagian "
+    "dalam yang ditarik ke bawah), dengan cahaya cukup dan tidak blur."
 )
 
 st.divider()
@@ -319,32 +315,22 @@ if uploaded_file is None:
 original_image = Image.open(uploaded_file).convert("RGB")
 orig_w, orig_h = original_image.size
 scale = CANVAS_WIDTH / orig_w
-canvas_height = int(orig_h * scale)
+display_height = int(orig_h * scale)
+display_image = original_image.resize((CANVAS_WIDTH, display_height))
 
-display_image = original_image.resize((CANVAS_WIDTH, canvas_height))
+st.write("**Geser & atur kotak crop di bawah ini, pas-kan ke area konjungtiva murni:**")
 
-st.write("**Cat (brush) area konjungtiva murni di bawah ini:**")
-
-brush_size = st.slider(
-    "Ukuran brush",
-    min_value=3,
-    max_value=40,
-    value=15,
-    help="Perbesar brush kalau area konjungtiva cukup luas, "
-         "perkecil untuk hasil yang lebih presisi di tepi.",
+cropped_display = st_cropper(
+    display_image,
+    realtime_update=True,
+    box_color=PRIMARY,
+    aspect_ratio=None,
+    return_type="image",
+    key=f"cropper_{uploaded_file.file_id}",
 )
 
-canvas_result = st_canvas(
-    fill_color="rgba(0, 255, 0, 0.3)",
-    stroke_width=brush_size,
-    stroke_color="rgba(0, 255, 0, 0.7)",
-    background_image=display_image,
-    update_streamlit=True,
-    height=canvas_height,
-    width=CANVAS_WIDTH,
-    drawing_mode="freedraw",
-    key=f"canvas_crop_{uploaded_file.file_id}",
-)
+st.caption("Preview hasil crop (otomatis ikut update saat kotak digeser/diresize):")
+st.image(cropped_display, caption="Area yang akan dianalisis", width=250)
 
 predict_clicked = st.button("🔍 Prediksi", type="primary")
 
@@ -354,23 +340,18 @@ st.divider()
 # LANGKAH 4 -- HASIL
 # ----------------------------------------------------------------------
 if predict_clicked:
-    if canvas_result.image_data is None:
-        st.warning("Belum ada area yang dicat. Silakan brush area konjungtiva dulu.")
+    # cropped_display masih dalam resolusi tampilan (CANVAS_WIDTH), bukan
+    # resolusi asli -- scale balik koordinatnya supaya kita ambil piksel
+    # dari foto ASLI (kualitas penuh), bukan dari versi yang sudah diresize.
+    crop_w_disp, crop_h_disp = cropped_display.size
+    crop_resized = cropped_display.resize(
+        (max(1, int(crop_w_disp / scale)), max(1, int(crop_h_disp / scale)))
+    )
+    selected_pixels = np.array(crop_resized).reshape(-1, 3)
+
+    if selected_pixels.size == 0:
+        st.warning("Area crop tidak valid. Silakan atur ulang kotak crop.")
         st.stop()
-
-    canvas_rgba = canvas_result.image_data.astype(np.uint8)
-    brush_mask_small = canvas_rgba[:, :, 3] > 0
-
-    if brush_mask_small.sum() == 0:
-        st.warning("Belum ada area yang dicat. Silakan brush area konjungtiva dulu.")
-        st.stop()
-
-    mask_image_small = Image.fromarray((brush_mask_small * 255).astype(np.uint8))
-    mask_image_full = mask_image_small.resize((orig_w, orig_h), resample=Image.NEAREST)
-    brush_mask_full = np.array(mask_image_full) > 127
-
-    original_np = np.array(original_image)
-    selected_pixels = original_np[brush_mask_full]
 
     try:
         with st.spinner("Memproses..."):
@@ -391,38 +372,17 @@ if predict_clicked:
         for w in warnings:
             st.warning(f"⚠️ {w}")
 
-        overlay = original_np.copy()
-        overlay[brush_mask_full] = (
-            overlay[brush_mask_full] * 0.5 + np.array([0, 255, 0]) * 0.5
-        ).astype(np.uint8)
-
-        top, bottom, left, right = get_selection_bbox(brush_mask_full, padding=25)
-        zoomed_overlay = overlay[top:bottom, left:right]
-        zoomed_original = original_np[top:bottom, left:right]
-
-        tab_zoom, tab_full = st.tabs(["🔎 Preview zoom (area dianalisis)", "🖼️ Foto penuh"])
-        with tab_zoom:
-            zcol1, zcol2 = st.columns(2)
-            with zcol1:
-                st.image(zoomed_original, caption="Area asli (di-zoom)", use_container_width=True)
-            with zcol2:
-                st.image(
-                    zoomed_overlay,
-                    caption="Area dipilih (hijau) + flash dibuang",
-                    use_container_width=True,
-                )
-        with tab_full:
-            st.image(
-                overlay,
-                caption=f"{result['n_pixels_total']} piksel dipilih, "
-                        f"{result['n_pixels_flash']} dibuang sebagai flash",
-                use_container_width=True,
-            )
+        st.image(
+            crop_resized,
+            caption=f"Area dianalisis -- {result['n_pixels_total']} piksel dipilih, "
+                    f"{result['n_pixels_flash']} dibuang sebagai flash",
+            use_container_width=True,
+        )
 
         n_valid = result["n_pixels_total"] - result["n_pixels_flash"]
         st.caption(
             f"Piksel valid dipakai untuk kalkulasi: **{n_valid}** "
-            f"(dari {result['n_pixels_total']} dicat, "
+            f"(dari {result['n_pixels_total']} di area crop, "
             f"{result['n_pixels_flash']} dibuang karena flash)"
         )
 
@@ -516,7 +476,7 @@ if st.session_state.history:
 
 st.divider()
 st.caption(
-    "💡 Tips: cat hanya bagian konjungtiva yang merah (hindari sklera "
-    "putih, bulu mata, dan kulit) untuk hasil yang paling akurat. "
-    "Gunakan tombol bin/undo di toolbar kanvas kalau salah mencat."
+    "💡 Tips: pas-kan kotak crop hanya ke bagian konjungtiva yang merah "
+    "(hindari sklera putih, bulu mata, dan kulit) untuk hasil yang paling "
+    "akurat."
 )
