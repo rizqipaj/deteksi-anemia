@@ -343,7 +343,7 @@ canvas_result = st_canvas(
     height=canvas_height,
     width=CANVAS_WIDTH,
     drawing_mode="freedraw",
-    key="canvas_crop",
+    key=f"canvas_crop_{uploaded_file.file_id}",
 )
 
 predict_clicked = st.button("🔍 Prediksi", type="primary")
