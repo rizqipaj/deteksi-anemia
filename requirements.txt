@@ -1,7 +1,7 @@
-streamlit
+streamlit==1.40.2
 numpy
 Pillow
 scikit-learn
 joblib
-streamlit-drawable-canvas-fix==0.9.4
+streamlit-drawable-canvas-fix==0.9.8
 plotly
