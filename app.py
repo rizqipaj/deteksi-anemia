@@ -283,10 +283,21 @@ st.divider()
 # ----------------------------------------------------------------------
 step_header(3, "Upload Foto & Tandai Area Konjungtiva")
 
-uploaded_file = st.file_uploader(
-    "Upload foto konjungtiva (sudah zoom ke mata)",
-    type=["jpg", "jpeg", "png"],
+photo_source = st.radio(
+    "Sumber foto",
+    options=["📁 Upload dari galeri", "📷 Ambil foto dari kamera"],
+    horizontal=True,
 )
+
+if photo_source == "📁 Upload dari galeri":
+    uploaded_file = st.file_uploader(
+        "Upload foto konjungtiva (sudah zoom ke mata)",
+        type=["jpg", "jpeg", "png"],
+    )
+else:
+    uploaded_file = st.camera_input(
+        "Ambil foto konjungtiva langsung (zoom dekat ke mata)",
+    )
 
 if uploaded_file is None:
     st.info("Upload foto sesuai panduan di atas untuk melanjutkan.")
