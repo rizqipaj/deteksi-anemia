@@ -3,5 +3,5 @@ numpy
 Pillow
 scikit-learn
 joblib
-streamlit-drawable-canvas-fix
+streamlit-drawable-canvas-fix==0.9.4
 plotly
